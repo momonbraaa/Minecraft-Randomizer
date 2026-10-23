@@ -34,11 +34,15 @@ code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:12px}
 
 <div class="card">
 <h2>1. 元データを選ぶ</h2>
-<p class="s">公式 <code>bedrock-samples</code> の <code>behavior_pack</code> 内のフォルダを選びます。</p>
+<p class="s">公式 <code>bedrock-samples</code> の zip ファイルをそのまま選べます(スマホ可)。recipes と chests は自動で見つけます。</p>
+<label>bedrock-samples の zip</label>
+<input type="file" id="zip" accept=".zip,application/zip">
+<details style="margin-top:10px"><summary class="s" style="cursor:pointer">PC向け: フォルダを直接選ぶ</summary>
 <label>recipes フォルダ</label>
 <input type="file" id="rec" webkitdirectory multiple>
 <label>loot_tables/chests フォルダ(任意)</label>
 <input type="file" id="loot" webkitdirectory multiple>
+</details>
 </div>
 
 <div class="card">
@@ -103,9 +107,22 @@ async function build(){
   const r=rng(hashSeed(seedStr));
   const files={};
   let msg=[];
+  const zr=[],zl=[],seen=new Set();
+  const zf=$("zip").files[0];
+  if(zf){
+    const z=await JSZip.loadAsync(zf);
+    for(const [p,e] of Object.entries(z.files)){
+      if(e.dir)continue;
+      let m=p.match(/(?:^|\/)recipes\/([^\/]+\.json)$/);
+      if(m){if(!seen.has(m[1])){seen.add(m[1]);zr.push({name:m[1],text:()=>e.async("string")})}continue}
+      m=p.match(/(?:^|\/)loot_tables\/chests\/(.+\.json)$/);
+      if(m)zl.push({name:m[1].split("/").pop(),rel:m[1],text:()=>e.async("string")});
+    }
+    if(!zr.length&&!zl.length)throw new Error("zip の中に recipes / loot_tables/chests が見つかりません");
+  }
 
   // --- recipes ---
-  const rf=[...$("rec").files].filter(f=>f.name.endsWith(".json"));
+  const rf=zf?zr:[...$("rec").files].filter(f=>f.name.endsWith(".json"));
   if(rf.length){
     const docs=[];
     for(const f of rf){
@@ -127,7 +144,7 @@ async function build(){
   }
 
   // --- loot tables ---
-  const lf=[...$("loot").files].filter(f=>f.name.endsWith(".json"));
+  const lf=zf?zl:[...$("loot").files].filter(f=>f.name.endsWith(".json"));
   if(lf.length){
     const docs=[],pool=[],refs=[];
     const walk=(o)=>{
@@ -145,13 +162,13 @@ async function build(){
     shuffle(pool,r);
     refs.forEach((o,i)=>{o.name=pool[i]});
     for(const d of docs){
-      const rel=(d.f.webkitRelativePath||d.f.name).split("/").slice(1).join("/");
+      const rel=d.f.rel||(d.f.webkitRelativePath||d.f.name).split("/").slice(1).join("/");
       files["loot_tables/chests/"+rel]=JSON.stringify(d.j,null,2);
     }
     msg.push("チェスト: "+refs.length+" 件をシャッフル");
   }
 
-  if(!Object.keys(files).length)throw new Error("recipes または chests フォルダを選んでください");
+  if(!Object.keys(files).length)throw new Error("bedrock-samples の zip を選んでください");
 
   files["manifest.json"]=JSON.stringify({
     format_version:2,
