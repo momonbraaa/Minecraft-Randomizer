@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>マイクラ ランダマイザー生成</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f6f5f1;--card:#fff;--tx:#1d1d1b;--mu:#6b6a64;--ac:#3a7d2c;--ac2:#fff;--bd:#dcdad2}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171815;--card:#222320;--tx:#eceae2;--mu:#9a988e;--ac:#6cbf58;--ac2:#10200b;--bd:#383934}}
+:root[data-theme="dark"]{--bg:#171815;--card:#222320;--tx:#eceae2;--mu:#9a988e;--ac:#6cbf58;--ac2:#10200b;--bd:#383934}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.6 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:8px 0 4px}
+p.s{color:var(--mu);margin:0 0 14px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:15px;margin:0 0 6px}
+label{display:block;font-size:13px;color:var(--mu);margin:8px 0 4px}
+input[type=text],input[type=file]{width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font-size:15px}
+.row{display:flex;gap:8px}
+button{border:0;border-radius:10px;padding:11px 14px;font-size:15px;font-weight:600;background:var(--ac);color:var(--ac2);cursor:pointer}
+button.g{background:var(--bd);color:var(--tx)}
+button:disabled{opacity:.5}
+.ck{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--tx);margin:6px 0}
+#log{font-size:13px;color:var(--mu);white-space:pre-wrap;margin-top:8px}
+code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>マイクラ統合版 ランダマイザー生成</h1>
+<p class="s">シード値から、レシピと戦利品がシャッフルされたビヘイビアパックを作ります。ワールドを作るたびに新しいシードで生成してください。</p>
+
+<div class="card">
+<h2>1. 元データを選ぶ</h2>
+<p class="s">公式 <code>bedrock-samples</code> の <code>behavior_pack</code> 内のフォルダを選びます。</p>
+<label>recipes フォルダ</label>
+<input type="file" id="rec" webkitdirectory multiple>
+<label>loot_tables/chests フォルダ(任意)</label>
+<input type="file" id="loot" webkitdirectory multiple>
+</div>
+
+<div class="card">
+<h2>2. シード</h2>
+<div class="row"><input type="text" id="seed" inputmode="numeric"><button class="g" id="dice" type="button">🎲</button></div>
+<div class="ck"><input type="checkbox" id="safe" checked><label for="safe" style="margin:0;color:inherit">基本アイテムのレシピは固定(作業台・棒・かまど・つるはし等)</label></div>
+</div>
+
+<button id="go" type="button" style="width:100%">パックを生成</button>
+<div id="log"></div>
+
+<div class="card" style="margin-top:14px">
+<h2>使い方</h2>
+<p class="s" style="margin:0">ダウンロードした zip を <code>.mcpack</code> に名前変更して開くとインポートされます。ワールド設定の「ビヘイビアパック」で有効化してください。新しいワールドでは新しいシードで作り直します。</p>
+</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const log=t=>{$("log").textContent=t};
+const newSeed=()=>{$("seed").value=String(Math.floor(Math.random()*4294967295))};
+newSeed();
+$("dice").onclick=newSeed;
+
+function rng(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function shuffle(arr,r){for(let i=arr.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}return arr}
+function hashSeed(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+const uuid=()=>crypto.randomUUID();
+
+const KEEP=new Set(["crafting_table","stick","planks","oak_planks","spruce_planks","birch_planks","jungle_planks","acacia_planks","dark_oak_planks","mangrove_planks","cherry_planks","bamboo_planks","furnace","chest","wooden_pickaxe","stone_pickaxe","iron_pickaxe","diamond_pickaxe","torch","iron_ingot","diamond","ender_eye","blaze_powder","flint_and_steel","bucket","shears"]);
+const short=s=>String(s).replace("minecraft:","");
+
+async function readJson(f){
+  const t=await f.text();
+  try{return JSON.parse(t)}catch(e){return JSON.parse(t.replace(/\/\/.*$/gm,"").replace(/,(\s*[}\]])/g,"$1"))}
+}
+
+// レシピ: result / output を持つキーを探す
+function slots(obj){
+  const out=[];
+  for(const k of Object.keys(obj)){
+    if(!k.startsWith("minecraft:recipe_"))continue;
+    const r=obj[k];
+    for(const f of ["result","output"]){
+      if(r[f]===undefined)continue;
+      out.push({o:r,f});
+    }
+  }
+  return out;
+}
+const getName=v=>typeof v==="string"?v:(v&&(v.item||v.name));
+function setName(o,f,name){
+  const v=o[f];
+  if(typeof v==="string"){o[f]=name}
+  else if(v&&v.item!==undefined){v.item=name}
+  else if(v&&v.name!==undefined){v.name=name}
+}
+
+async function build(){
+  const seedStr=$("seed").value.trim()||"0";
+  const r=rng(hashSeed(seedStr));
+  const files={};
+  let msg=[];
+
+  // --- recipes ---
+  const rf=[...$("rec").files].filter(f=>f.name.endsWith(".json"));
+  if(rf.length){
+    const docs=[];
+    for(const f of rf){
+      try{docs.push({f,j:await readJson(f)})}catch(e){}
+    }
+    const pool=[],targets=[];
+    for(const d of docs){
+      for(const s of slots(d.j)){
+        const n=getName(s.o[s.f]);
+        if(!n)continue;
+        if($("safe").checked&&KEEP.has(short(n)))continue;
+        pool.push(n);targets.push(s);
+      }
+    }
+    shuffle(pool,r);
+    targets.forEach((s,i)=>setName(s.o,s.f,pool[i]));
+    for(const d of docs)files["recipes/"+d.f.name]=JSON.stringify(d.j,null,2);
+    msg.push("レシピ: "+targets.length+" 件をシャッフル");
+  }
+
+  // --- loot tables ---
+  const lf=[...$("loot").files].filter(f=>f.name.endsWith(".json"));
+  if(lf.length){
+    const docs=[],pool=[],refs=[];
+    const walk=(o)=>{
+      if(Array.isArray(o)){o.forEach(walk);return}
+      if(o&&typeof o==="object"){
+        if(o.type==="item"&&typeof o.name==="string"){
+          pool.push(o.name);refs.push(o);
+        }
+        Object.values(o).forEach(walk);
+      }
+    };
+    for(const f of lf){
+      try{const j=await readJson(f);walk(j);docs.push({f,j})}catch(e){}
+    }
+    shuffle(pool,r);
+    refs.forEach((o,i)=>{o.name=pool[i]});
+    for(const d of docs){
+      const rel=(d.f.webkitRelativePath||d.f.name).split("/").slice(1).join("/");
+      files["loot_tables/chests/"+rel]=JSON.stringify(d.j,null,2);
+    }
+    msg.push("チェスト: "+refs.length+" 件をシャッフル");
+  }
+
+  if(!Object.keys(files).length)throw new Error("recipes または chests フォルダを選んでください");
+
+  files["manifest.json"]=JSON.stringify({
+    format_version:2,
+    header:{name:"Randomizer "+seedStr,description:"Seed: "+seedStr,uuid:uuid(),version:[1,0,0],min_engine_version:[1,21,0]},
+    modules:[{type:"data",uuid:uuid(),version:[1,0,0]}]
+  },null,2);
+  return{files,msg};
+}
+
+$("go").onclick=async()=>{
+  $("go").disabled=true;log("生成中…");
+  try{
+    const {files,msg}=await build();
+    const zip=new JSZip();
+    for(const [p,c] of Object.entries(files))zip.file(p,c);
+    const data=await zip.generateAsync({type:"uint8array",compression:"DEFLATE"});
+    log(msg.join("\n")+"\nシード: "+$("seed").value);
+    const dl=await claude.use("downloads");
+    if(!dl){log("この環境ではダウンロードできません");return}
+    await dl.save({filename:"randomizer_"+$("seed").value+".zip",data});
+  }catch(e){
+    log("エラー: "+(e&&e.message?e.message:JSON.stringify(e)));
+  }finally{$("go").disabled=false}
+};
+</script>
+</body>
+</html>
